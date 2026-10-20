@@ -302,36 +302,35 @@ class TestConfigFunctions:
         entries = {
             entry["model_client_config"]["model_name"]: entry
             for entry in defaults
-            if entry.get("model_client_config", {}).get("client_provider") == "MiniMax"
+            if entry.get("provider_metadata", {}).get("provider") == "MiniMax"
         }
 
-        assert set(entries) == {"MiniMax-M3", "MiniMax-M2.7"}
+        assert list(entries) == ["MiniMax-M3.1-Flash", "MiniMax-M3"]
+        flash = entries["MiniMax-M3.1-Flash"]
         m3 = entries["MiniMax-M3"]
-        m27 = entries["MiniMax-M2.7"]
-
-        assert m3["model_client_config"]["api_base"] == "https://api.minimax.io/v1"
-        assert m27["model_client_config"]["api_base"] == "https://api.minimax.io/v1"
-        assert m3["model_client_config"]["api_key"] == "${MINIMAX_API_KEY}"
-        assert m27["model_client_config"]["api_key"] == "${MINIMAX_API_KEY}"
-
-        assert m3["provider_metadata"]["context_window"] == 1000000
-        assert m27["provider_metadata"]["context_window"] == 204800
-        assert m3["provider_metadata"]["pricing_usd_per_million_tokens"] == {
-            "input": 0.6,
-            "output": 2.4,
-            "cache_read": 0.12,
+        for entry in entries.values():
+            assert entry["model_client_config"]["client_provider"] == "OpenAI"
+            assert entry["model_client_config"]["api_base"] == "https://api.minimax.io/v1"
+            assert entry["model_client_config"]["api_key"] == "${MINIMAX_API_KEY}"
+            assert entry["provider_metadata"]["context_window"] == 1000000
+            assert entry["provider_metadata"]["input_modalities"] == ["text", "image", "video"]
+            assert entry["is_default"] is False
+        assert defaults[0]["is_default"] is True
+        assert defaults[0]["model_client_config"]["model_name"] == "${MODEL_NAME}"
+        assert flash["provider_metadata"]["max_output_tokens"] == 524288
+        assert flash["provider_metadata"]["pricing_usd_per_million_tokens"] == {
+            "input": 0.15,
+            "output": 0.60,
+            "cache_read": 0.015,
             "cache_write": None,
         }
-        assert m27["provider_metadata"]["pricing_usd_per_million_tokens"] == {
-            "input": 0.3,
-            "output": 1.2,
-            "cache_read": 0.06,
-            "cache_write": 0.375,
+        assert m3["provider_metadata"]["pricing_usd_per_million_tokens"] == {
+            "up_to_512k": {"input": 0.30, "output": 1.20, "cache_read": 0.06},
+            "above_512k": {"input": 0.60, "output": 2.40, "cache_read": 0.12},
+            "cache_write": None,
         }
-        assert m3["provider_metadata"]["input_modalities"] == ["text", "image", "video"]
-        assert m27["provider_metadata"]["input_modalities"] == ["text"]
         assert m3["provider_metadata"]["thinking"] == ["adaptive", "disabled"]
-        assert m27["provider_metadata"]["thinking"] == ["always_on"]
+        assert flash["provider_metadata"]["thinking"] == ["adaptive"]
 
         endpoints = m3["provider_metadata"]["regional_endpoints"]
         assert endpoints == [
@@ -348,7 +347,27 @@ class TestConfigFunctions:
                 "docs_root": "https://platform.minimaxi.com/docs",
             },
         ]
-        assert m27["provider_metadata"]["regional_endpoints"] == endpoints
+        assert flash["provider_metadata"]["regional_endpoints"] == endpoints
+
+    @staticmethod
+    @pytest.mark.parametrize("model_name", ["MiniMax-M2.7", "custom-minimax-model"])
+    def test_minimax_template_migration_preserves_saved_models(tmp_path: Path, model_name: str):
+        template = Path(__file__).parents[2] / "jiuwenswarm" / "resources" / "config.yaml"
+        saved_models = [{
+            "alias": "Saved model",
+            "model_client_config": {
+                "model_name": model_name,
+                "client_provider": "OpenAI",
+                "api_base": "https://api.minimaxi.com/v1",
+                "api_key": "fixture-key",
+            },
+            "model_config_obj": {"temperature": 0.7},
+            "is_default": True,
+        }]
+        user_config = tmp_path / "config.yaml"
+        user_config.write_text(yaml.safe_dump({"models": {"defaults": saved_models}}))
+        migrate_config_from_template(template, user_config)
+        assert yaml.safe_load(user_config.read_text())["models"]["defaults"] == saved_models
 
     @staticmethod
     def test_migrate_config_from_template_deep_merges_symphony(
